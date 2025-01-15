@@ -206,3 +206,11 @@ class PickleDB:
         except Exception as e:
             print(f"Failed to restore backup: {e}")
             return False
+        
+    def cleanup_backups(self, max_backups=5):
+        """Giới hạn số lượng file backup."""
+        backups = sorted(os.listdir(self.backup_dir))
+        if len(backups) > max_backups:
+            for old_backup in backups[:-max_backups]:
+                os.remove(os.path.join(self.backup_dir, old_backup))
+                print(f"Deleted old backup: {old_backup}")
