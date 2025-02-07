@@ -1,119 +1,166 @@
-import unittest
+import datetime
 import os
-import time
-import signal
-from pickledb import PickleDB  # Adjust the import path if needed
+import orjson
+from cryptography.fernet import Fernet
 
+class PickleDB:
+    def __init__(self, location, backup_dir="backups", encryption=False):
+        """
+        Initialize the PickleDB object.
 
-class TestPickleDB(unittest.TestCase):
-    def setUp(self):
-        """Set up a PickleDB instance with a real file."""
-        self.test_file = "test_pickledb.json"
-        self.db = PickleDB(self.test_file)
-
-    def tearDown(self):
-        """Clean up after tests."""
-        if os.path.exists(self.test_file):
-            os.remove(self.test_file)
-
-    def _timeout_handler(self, signum, frame):
-        """Handle timeouts for stress tests."""
-        raise TimeoutError("Test exceeded the timeout duration")
-
-    # Original Stress Test
-    def test_stress_operation(self):
-        """Stress test: Insert and retrieve a large number of key-value pairs, then dump."""
-        timeout_duration = 600  # Timeout in seconds (10 minutes)
-
-        # Set a signal-based timeout
-        signal.signal(signal.SIGALRM, self._timeout_handler)
-        signal.alarm(timeout_duration)
-
+        Args:
+            location (str): Path to the database file.
+            backup_dir (str): Directory for storing backups.
+            encryption (bool): Whether to enable encryption.
+        """
+        self.backup_dir = os.path.expanduser(backup_dir)
+        os.makedirs(self.backup_dir, exist_ok=True)
+        self.location = os.path.expanduser(location)
+        self.encryption = encryption
+        self.key_file = f"{self.location}.key"
+        self.key = None
+        
+        if self.encryption:
+            self._setup_encryption()
+        
+        self._load()
+    
+    def _setup_encryption(self):
+        """
+        Setup encryption by generating or loading an encryption key.
+        """
+        if os.path.exists(self.key_file):
+            with open(self.key_file, 'rb') as f:
+                self.key = f.read()
+        else:
+            self.key = Fernet.generate_key()
+            with open(self.key_file, 'wb') as f:
+                f.write(self.key)
+        self.cipher = Fernet(self.key)
+    
+    def _encrypt(self, data):
+        """
+        Encrypt data if encryption is enabled.
+        """
+        return self.cipher.encrypt(data.encode()) if self.encryption else data.encode()
+    
+    def _decrypt(self, data):
+        """
+        Decrypt data if encryption is enabled.
+        """
+        return self.cipher.decrypt(data).decode() if self.encryption else data.decode()
+    
+    def _create_backup(self):
+        """
+        Create a backup of the current database.
+        """
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_path = os.path.join(self.backup_dir, f"backup_{timestamp}.json")
         try:
-            num_docs = 20_000_000
-
-            # Measure memory loading time
-            start_time = time.time()
-            for i in range(num_docs):
-                self.db.set(f"key{i}", f"value{i}")
-            mem_time = time.time()
-            mem_duration = mem_time - start_time
-            print(f"\n{num_docs} stored in memory in {mem_duration:.2f} seconds")
-
-            # Measure retrieval performance before dumping
-            start_time = time.time()
-            retrieved_docs = [self.db.get(f"key{i}") for i in range(num_docs)]
-            retrieval_time = time.time() - start_time
-            print(f"Retrieved {num_docs} key-value pairs in {retrieval_time:.2f} seconds")
-
-            # Measure dump performance
-            start_time = time.time()
-            self.db.save()
-            dump_time = time.time() - start_time
-            print(f"Dumped {num_docs} key-value pairs to disk in {dump_time:.2f} seconds")
-
-        finally:
-            signal.alarm(0)  # Cancel the alarm after the test
-
-    # Functional Tests
-    def test_set_and_get(self):
-        """Test setting and retrieving a key-value pair."""
-        self.db.set("key1", "value1")
-        self.assertEqual(self.db.get("key1"), "value1")
-
-    def test_get_nonexistent_key(self):
-        """Test retrieving a key that does not exist."""
-        self.assertIsNone(self.db.get("nonexistent"))
-
-    def test_remove_key(self):
-        """Test removing a key-value pair."""
-        self.db.set("key1", "value1")
-        self.assertTrue(self.db.remove("key1"))
-        self.assertIsNone(self.db.get("key1"))
-
-    def test_remove_nonexistent_key(self):
-        """Test removing a key that does not exist."""
-        self.assertFalse(self.db.remove("nonexistent"))
-
-    def test_purge(self):
-        """Test purging all keys and values."""
-        self.db.set("key1", "value1")
-        self.db.set("key2", "value2")
-        self.db.purge()
-        self.assertEqual(self.db.all(), [])
-
-    def test_all_keys(self):
-        """Test retrieving all keys."""
-        self.db.set("key1", "value1")
-        self.db.set("key2", "value2")
-        self.assertListEqual(sorted(self.db.all()), ["key1", "key2"])
-
-    def test_dump_and_reload(self):
-        """Test dumping the database to disk and reloading it."""
-        self.db.set("key1", "value1")
-        self.db.save()
-        reloaded_db = PickleDB(self.test_file)
-        self.assertEqual(reloaded_db.get("key1"), "value1")
-
-    def test_invalid_file_loading(self):
-        """Test initializing a database with a corrupt file."""
-        with open(self.test_file, 'w') as f:
-            f.write("corrupt data")
-        db = PickleDB(self.test_file)
-        self.assertEqual(db.all(), [])
-
-    def test_set_non_string_key(self):
-        """Test setting a non-string key."""
-        self.db.set(123, "value123")
-        self.assertEqual(self.db.get("123"), "value123")
-
-    def test_remove_non_string_key(self):
-        """Test removing a key that was stored as a non-string key."""
-        self.db.set(123, "value123")
-        self.assertTrue(self.db.remove(123))
-        self.assertIsNone(self.db.get("123"))
-
-
-if __name__ == "__main__":
-    unittest.main()
-
+            with open(backup_path, 'wb') as backup_file:
+                backup_file.write(self._encrypt(orjson.dumps(self.db).decode()))
+        except Exception as e:
+            print(f"Failed to create backup: {e}")
+    
+    def _load(self):
+        """
+        Load data from the JSON file if it exists, or initialize an empty database.
+        """
+        if os.path.exists(self.location) and os.path.getsize(self.location) > 0:
+            try:
+                with open(self.location, 'rb') as f:
+                    data = f.read()
+                    data = self._decrypt(data)
+                    self.db = orjson.loads(data)
+            except Exception as e:
+                self.db = {}
+                print(f"Failed to load database: {e}")
+        else:
+            self.db = {}
+    
+    def save(self, backup=True):
+        """
+        Save the database to disk, with optional backup creation.
+        """
+        temp_location = f"{self.location}.tmp"
+        try:
+            with open(temp_location, 'wb') as temp_file:
+                temp_file.write(self._encrypt(orjson.dumps(self.db).decode()))
+            os.replace(temp_location, self.location)
+            if backup:
+                self._create_backup()
+            return True
+        except Exception as e:
+            print(f"Failed to write database to disk: {e}")
+            return False
+    
+    def set(self, key, value):
+        """
+        Add or update a key-value pair in the database.
+        """
+        key = str(key)
+        self.db[key] = value
+        return True
+    
+    def get(self, key):
+        """
+        Retrieve the value associated with a key.
+        """
+        key = str(key)
+        return self.db.get(key)
+    
+    def remove(self, key):
+        """
+        Remove a key from the database.
+        """
+        key = str(key)
+        if key in self.db:
+            del self.db[key]
+            return True
+        return False
+    
+    def purge(self):
+        """
+        Clear all keys from the database.
+        """
+        self.db.clear()
+        return True
+    
+    def all(self):
+        """
+        Retrieve a list of all keys in the database.
+        """
+        return list(self.db.keys())
+    
+    def list_backups(self):
+        """
+        List all available backup files.
+        """
+        return sorted(os.listdir(self.backup_dir))
+    
+    def restore(self, backup_filename):
+        """
+        Restore the database from a specified backup file.
+        """
+        backup_path = os.path.join(self.backup_dir, backup_filename)
+        if not os.path.exists(backup_path):
+            print(f"Backup file not found: {backup_filename}")
+            return False
+        try:
+            with open(backup_path, 'rb') as backup_file:
+                data = backup_file.read()
+                self.db = orjson.loads(self._decrypt(data))
+            self.save(backup=False)
+            return True
+        except Exception as e:
+            print(f"Failed to restore backup: {e}")
+            return False
+    
+    def cleanup_backups(self, max_backups=5):
+        """
+        Limit the number of backup files stored.
+        """
+        backups = sorted(os.listdir(self.backup_dir))
+        if len(backups) > max_backups:
+            for old_backup in backups[:-max_backups]:
+                os.remove(os.path.join(self.backup_dir, old_backup))

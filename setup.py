@@ -69,6 +69,6 @@ setup(name="pickleDB",
         "Intended Audience :: Developers",
         "Topic :: Database" ],
     py_modules=['pickledb'],
-    install_requires=['orjson'],
+    install_requires=['orjson', 'cryptography', 'rapidfuzz'],
 )
 
