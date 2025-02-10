@@ -1,7 +1,10 @@
-import datetime
 import os
 import orjson
+import datetime
 from cryptography.fernet import Fernet
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+import uvicorn
 
 class PickleDB:
     def __init__(self, location, backup_dir="backups", encryption=False,):
@@ -78,7 +81,7 @@ class PickleDB:
         else:
             self.db = {}
     
-    def save(self, backup=True):
+    def save(self, backup=True, online=False):
         """
         Save the database to disk, with optional backup creation.
         """
@@ -122,7 +125,7 @@ class PickleDB:
 
     def fuzzy_search(self, search_key, threshold=80):
         keys = list(self.db.keys())
-        matches = process.extract(search_key, keys, limit=5)
+        matches = self.process.extract(search_key, keys, limit=5)
         return [match[0] for match in matches if match[1] >= threshold]
     
     def remove(self, key):
@@ -180,3 +183,12 @@ class PickleDB:
         if len(backups) > max_backups:
             for old_backup in backups[:-max_backups]:
                 os.remove(os.path.join(self.backup_dir, old_backup))
+
+     # === Thêm chức năng chạy API ===
+    def run_api(self, host="0.0.0.0", port=8000):
+        """
+        Khởi động REST API cho PickleDB
+        """
+        from .api import create_api
+        app = create_api(self)
+        uvicorn.run(app, host=host, port=port)
